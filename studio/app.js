@@ -18,8 +18,9 @@ async function currentRole(user){
   const {data,error}=await db.from("profiles").select("role").eq("id",user.id).maybeSingle();
   return error||!data?.role?"creator":data.role;
 }
+function canReview(role){return role==="reviewer"||role==="super_admin"}
 function setAdminVisibility(role){
-  document.querySelectorAll("[data-admin-only]").forEach(el=>{el.hidden=role!=="admin"});
+  document.querySelectorAll("[data-admin-only]").forEach(el=>{el.hidden=!canReview(role)});
 }
 async function renderStats(user){
   const {data,error}=await db.from("submissions").select("status").eq("creator_id",user.id);
@@ -96,7 +97,7 @@ async function initStudio(){
   activeUser=user;activeRole=await currentRole(user);setAdminVisibility(activeRole);
   const review=document.querySelector("#reviewList");
   if(review){
-    if(activeRole!=="admin"){location.href="/studio/home/";return}
+    if(!canReview(activeRole)){location.href="/studio/home/";return}
     await renderReviewQueue(user);return;
   }
   await Promise.all([renderStats(user),renderList(user)]);
@@ -108,6 +109,6 @@ document.addEventListener("DOMContentLoaded",async()=>{
 });
 document.addEventListener("openframe:languagechange",async()=>{
   if(!activeUser)return;
-  if(document.querySelector("#reviewList")&&activeRole==="admin"){await renderReviewQueue(activeUser);return}
+  if(document.querySelector("#reviewList")&&canReview(activeRole)){await renderReviewQueue(activeUser);return}
   await Promise.all([renderStats(activeUser),renderList(activeUser)]);
 });
