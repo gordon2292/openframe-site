@@ -3,7 +3,7 @@ const topicKey={science:"science",life_skills:"life",language:"languageTopic",ar
 const escapeHTML=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
 const cfg=window.OPENFRAME_SUPABASE;
 const db=cfg&&window.supabase?window.supabase.createClient(cfg.url,cfg.publishableKey):null;
-let activeUser=null;
+let activeUser=null;let activeRole="creator";
 const t=key=>window.ofText?window.ofText(key):key;
 function toast(message){const el=document.querySelector(".toast");if(!el)return;el.textContent=message;el.classList.add("show");setTimeout(()=>el.classList.remove("show"),3500)}
 function statusClass(status){return status==="published"?"published":status==="revision_requested"?"revise":status==="declined"?"declined":""}
@@ -13,6 +13,13 @@ async function currentUser(){
   const {data:{user},error}=await db.auth.getUser();
   if(error||!user){location.href="/studio/login/";return null}
   return user;
+}
+async function currentRole(user){
+  const {data,error}=await db.from("profiles").select("role").eq("id",user.id).maybeSingle();
+  return error||!data?.role?"creator":data.role;
+}
+function setAdminVisibility(role){
+  document.querySelectorAll("[data-admin-only]").forEach(el=>{el.hidden=role!=="admin"});
 }
 async function renderStats(user){
   const {data,error}=await db.from("submissions").select("status").eq("creator_id",user.id);
@@ -29,6 +36,20 @@ async function renderList(user){
   if(error){target.innerHTML='<div class="empty">'+escapeHTML(t("readFail"))+'</div>';return}
   if(!data?.length){target.innerHTML='<div class="empty">'+escapeHTML(t("empty"))+'</div>';return}
   target.innerHTML=data.map(x=>'<article class="submission"><div class="icon">▸</div><div><h3>'+escapeHTML(x.title)+'</h3><small>'+escapeHTML(t(topicKey[x.topic]||x.topic))+' · '+escapeHTML(x.age_band)+' · '+relativeDate(x.created_at)+'</small></div><span class="status '+statusClass(x.status)+'">'+escapeHTML(t(statusKey[x.status]||"waiting"))+'</span></article>').join("");
+}
+async function renderReviewQueue(user){
+  const target=document.querySelector("#reviewList");if(!target)return;
+  const {data,error}=await db.from("submissions").select("id,title,topic,age_band,summary,source_url,status,created_at").in("status",["pending","revision_requested"]).order("created_at",{ascending:true});
+  if(error){target.innerHTML='<article class="review-item"><h2>'+escapeHTML(t("reviewFail"))+'</h2><p>'+escapeHTML(error.message)+'</p></article>';return}
+  if(!data?.length){target.innerHTML='<article class="review-item"><h2>'+escapeHTML(t("reviewEmpty"))+'</h2></article>';return}
+  target.innerHTML=data.map(x=>'<article class="review-item"><div class="eyebrow">'+escapeHTML(t(topicKey[x.topic]||x.topic))+' · '+escapeHTML(x.age_band)+'</div><h2>'+escapeHTML(x.title)+'</h2><p>'+escapeHTML(x.summary)+'</p><p><a class="source" target="_blank" rel="noopener" href="'+escapeHTML(x.source_url)+'">'+escapeHTML(t("sourceLink"))+' ↗</a></p><label>'+escapeHTML(t("reviewNote"))+'<textarea data-review-note="'+escapeHTML(x.id)+'"></textarea></label><div class="actions"><button data-review-action="published" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("approve"))+'</button><button data-review-action="revision_requested" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("requestRevision"))+'</button><button data-review-action="declined" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("decline"))+'</button></div></article>').join("");
+  target.querySelectorAll("[data-review-action]").forEach(button=>button.onclick=async()=>{
+    button.disabled=true;
+    const id=button.dataset.reviewId,status=button.dataset.reviewAction,note=target.querySelector('[data-review-note="'+id+'"]').value.trim();
+    const {error:updateError}=await db.from("submissions").update({status,review_note:note||null,reviewed_by:user.id,reviewed_at:new Date().toISOString()}).eq("id",id);
+    if(updateError){toast(t("reviewFail")+updateError.message);button.disabled=false;return}
+    toast(t("reviewSaved"));await renderReviewQueue(user);
+  });
 }
 function setFileHint(file){
   const hint=document.querySelector("#fileHint");if(!hint)return;
@@ -69,21 +90,24 @@ function initLogout(){
   });
 }
 async function initStudio(){
-  const needsAuth=document.querySelector("#submissionForm,#submissionList,[data-count]");
+  const needsAuth=document.querySelector("#submissionForm,#submissionList,[data-count],#reviewList");
   if(!needsAuth)return;
   const user=await currentUser();if(!user)return;
-  activeUser=user;
+  activeUser=user;activeRole=await currentRole(user);setAdminVisibility(activeRole);
+  const review=document.querySelector("#reviewList");
+  if(review){
+    if(activeRole!=="admin"){location.href="/studio/home/";return}
+    await renderReviewQueue(user);return;
+  }
   await Promise.all([renderStats(user),renderList(user)]);
   const file=document.querySelector("#video");if(file)file.onchange=e=>setFileHint(e.target.files[0]);
   const form=document.querySelector("#submissionForm");if(form)form.onsubmit=event=>{event.preventDefault();submitContent(user,form)};
 }
 document.addEventListener("DOMContentLoaded",async()=>{
   initLogin();initLogout();await initStudio();
-  const review=document.querySelector("#reviewList");
-  if(review)review.innerHTML='<article class="review-item"><div class="eyebrow">'+escapeHTML(t("reviewOverline"))+'</div><h2>'+escapeHTML(t("reviewLocked"))+'</h2><p>'+escapeHTML(t("reviewLockedCopy"))+'</p></article>';
 });
 document.addEventListener("openframe:languagechange",async()=>{
-  if(activeUser){await Promise.all([renderStats(activeUser),renderList(activeUser)])}
-  const review=document.querySelector("#reviewList");
-  if(review)review.innerHTML='<article class="review-item"><div class="eyebrow">'+escapeHTML(t("reviewOverline"))+'</div><h2>'+escapeHTML(t("reviewLocked"))+'</h2><p>'+escapeHTML(t("reviewLockedCopy"))+'</p></article>';
+  if(!activeUser)return;
+  if(document.querySelector("#reviewList")&&activeRole==="admin"){await renderReviewQueue(activeUser);return}
+  await Promise.all([renderStats(activeUser),renderList(activeUser)]);
 });
