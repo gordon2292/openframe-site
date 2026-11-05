@@ -40,10 +40,18 @@ async function renderList(user){
 }
 async function renderReviewQueue(user){
   const target=document.querySelector("#reviewList");if(!target)return;
-  const {data,error}=await db.from("submissions").select("id,title,topic,age_band,summary,source_url,status,created_at").in("status",["pending","revision_requested"]).order("created_at",{ascending:true});
+  const {data,error}=await db.from("submissions").select("id,title,topic,age_band,summary,source_url,video_path,status,created_at").in("status",["pending","revision_requested"]).order("created_at",{ascending:true});
   if(error){target.innerHTML='<article class="review-item"><h2>'+escapeHTML(t("reviewFail"))+'</h2><p>'+escapeHTML(error.message)+'</p></article>';return}
   if(!data?.length){target.innerHTML='<article class="review-item"><h2>'+escapeHTML(t("reviewEmpty"))+'</h2></article>';return}
-  target.innerHTML=data.map(x=>'<article class="review-item"><div class="eyebrow">'+escapeHTML(t(topicKey[x.topic]||x.topic))+' · '+escapeHTML(x.age_band)+'</div><h2>'+escapeHTML(x.title)+'</h2><p>'+escapeHTML(x.summary)+'</p><p><a class="source" target="_blank" rel="noopener" href="'+escapeHTML(x.source_url)+'">'+escapeHTML(t("sourceLink"))+' ↗</a></p><label>'+escapeHTML(t("reviewNote"))+'<textarea data-review-note="'+escapeHTML(x.id)+'"></textarea></label><div class="actions"><button data-review-action="published" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("approve"))+'</button><button data-review-action="revision_requested" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("requestRevision"))+'</button><button data-review-action="declined" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("decline"))+'</button></div></article>').join("");
+  const cards=await Promise.all(data.map(async x=>{
+    let videoMarkup='<div class="video-preview missing">'+escapeHTML(t("videoUnavailable"))+'</div>';
+    if(x.video_path){
+      const {data:signed,error:signedError}=await db.storage.from("videos").createSignedUrl(x.video_path,3600);
+      if(!signedError&&signed?.signedUrl)videoMarkup='<video class="review-video" controls preload="metadata" playsinline src="'+escapeHTML(signed.signedUrl)+'"></video>';
+    }
+    return '<article class="review-item"><div class="eyebrow">'+escapeHTML(t(topicKey[x.topic]||x.topic))+' · '+escapeHTML(x.age_band)+'</div><h2>'+escapeHTML(x.title)+'</h2>'+videoMarkup+'<p>'+escapeHTML(x.summary)+'</p><p><a class="source" target="_blank" rel="noopener" href="'+escapeHTML(x.source_url)+'">'+escapeHTML(t("sourceLink"))+' ↗</a></p><label>'+escapeHTML(t("reviewNote"))+'<textarea data-review-note="'+escapeHTML(x.id)+'"></textarea></label><div class="actions"><button data-review-action="published" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("approve"))+'</button><button data-review-action="revision_requested" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("requestRevision"))+'</button><button data-review-action="declined" data-review-id="'+escapeHTML(x.id)+'">'+escapeHTML(t("decline"))+'</button></div></article>';
+  }));
+  target.innerHTML=cards.join("");
   target.querySelectorAll("[data-review-action]").forEach(button=>button.onclick=async()=>{
     button.disabled=true;
     const id=button.dataset.reviewId,status=button.dataset.reviewAction,note=target.querySelector('[data-review-note="'+id+'"]').value.trim();
